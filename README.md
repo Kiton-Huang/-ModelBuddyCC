@@ -114,10 +114,20 @@ HTML 导出文件支持：
 
 ```
 ModelBuddyCC/
-├── main.py              # 主程序源码
-├── build.bat            # Windows 构建脚本
-├── start.bat            # 开发启动脚本
-└── README.md            # 本文件
+├── main.py                  # 程序入口
+├── start.bat                # 开发启动脚本
+├── README.md                # 本文件
+└── app/                     # 应用模块包
+    ├── constants.py         # 路径常量 & 执行模式
+    ├── theme.py             # 主题颜色 & 字体
+    ├── models.py            # 数据模型
+    ├── balance.py           # 余额查询
+    ├── config.py            # 配置管理器
+    ├── export.py            # 对话导出（JSONL解析 + HTML生成）
+    ├── dashboard.py         # 余额仪表盘弹窗
+    ├── profile_dialog.py    # 配置编辑对话框
+    ├── export_dialog.py     # 导出选项对话框
+    └── main_window.py       # 主窗口
 ```
 
 ## 数据文件位置
