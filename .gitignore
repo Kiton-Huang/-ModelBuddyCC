@@ -1,0 +1,30 @@
+# Claude 本地配置（含用户路径和权限规则）
+.claude/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+
+# 辅助脚本（仅主体代码上传）
+build.bat
+
+# 垃圾/临时文件
+nul
+*.tmp
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+Thumbs.db
+Desktop.ini
