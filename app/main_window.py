@@ -13,7 +13,7 @@ from typing import Optional
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
 
-from app.constants import EXECUTION_MODES, EXECUTION_MODE_KEYS
+from app.constants import CLAUDE_JSON, BACKUP_DIR, EXECUTION_MODES, EXECUTION_MODE_KEYS
 from app.theme import COLORS, FONT_FAMILY, _appearance_mode, _sync_colors
 from app.models import ModelProfile, LaunchRecord
 from app.config import ConfigManager
