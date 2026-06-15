@@ -544,7 +544,7 @@ class ModelSwitcherApp(ctk.CTk):
         self.ctrl_frame = ctk.CTkFrame(self.tab_launcher, corner_radius=10,
                                   fg_color=COLORS["bg_card"])
         self.ctrl_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
-        self.ctrl_frame.grid_columnconfigure(2, weight=1)
+        self.ctrl_frame.grid_columnconfigure(3, weight=1)
 
         self.btn_launch = ctk.CTkButton(
             self.ctrl_frame,
@@ -559,6 +559,19 @@ class ModelSwitcherApp(ctk.CTk):
         self.btn_launch.grid(row=0, column=0, sticky="w", padx=(16, 12), pady=14)
         ToolTip(self.btn_launch, "在选定的项目目录中启动 Claude Code")
 
+        self.btn_vscode = ctk.CTkButton(
+            self.ctrl_frame,
+            text="💻 VS Code",
+            command=self._on_open_vscode,
+            height=42,
+            font=(FONT_FAMILY, 13, "bold"),
+            fg_color="#007acc",
+            hover_color="#005a9e",
+            corner_radius=8,
+        )
+        self.btn_vscode.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=14)
+        ToolTip(self.btn_vscode, "在选定的项目目录中用 VS Code 打开（执行 code .）")
+
         self.btn_export = ctk.CTkButton(
             self.ctrl_frame,
             text="📄 导出对话",
@@ -569,7 +582,7 @@ class ModelSwitcherApp(ctk.CTk):
             hover_color=COLORS["warning_hover"],
             corner_radius=8,
         )
-        self.btn_export.grid(row=0, column=1, sticky="w", padx=(0, 8), pady=14)
+        self.btn_export.grid(row=0, column=2, sticky="w", padx=(0, 8), pady=14)
         ToolTip(self.btn_export, "导出项目目录下的 Claude 对话记录为 HTML 文件")
 
         self.auto_launch_check = ctk.CTkCheckBox(
@@ -583,7 +596,7 @@ class ModelSwitcherApp(ctk.CTk):
             border_color=COLORS["border"],
             checkmark_color=COLORS["text_primary"],
         )
-        self.auto_launch_check.grid(row=0, column=2, sticky="e", padx=(0, 16), pady=14)
+        self.auto_launch_check.grid(row=0, column=3, sticky="e", padx=(0, 16), pady=14)
 
         # ── 历史记录区 ──
         hist_header = ctk.CTkFrame(self.tab_launcher, fg_color="transparent")
@@ -630,6 +643,22 @@ class ModelSwitcherApp(ctk.CTk):
             self.launcher_dir_entry.delete(0, "end")
             self.launcher_dir_entry.insert(0, path)
 
+    @staticmethod
+    def _open_vscode(directory: str):
+        """在指定目录中用 VS Code 打开（执行 code .）"""
+        if not os.path.isdir(directory):
+            messagebox.showwarning("提示", f"目录不存在：\n{directory}")
+            return
+        try:
+            subprocess.Popen('code .', cwd=directory, shell=True,
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+        except FileNotFoundError:
+            messagebox.showwarning(
+                "未找到 VS Code",
+                "请确认已安装 VS Code 并将 code 命令添加到 PATH 环境变量。\n\n"
+                "可在 VS Code 中按 Ctrl+Shift+P → 搜索 \"Shell Command\" → 安装 code 命令。",
+            )
+
     def _on_launch(self):
         directory = self.launcher_dir_entry.get().strip()
         if not directory:
@@ -639,6 +668,13 @@ class ModelSwitcherApp(ctk.CTk):
             messagebox.showwarning("提示", f"目录不存在：\n{directory}")
             return
         self._launch_claude(directory)
+
+    def _on_open_vscode(self):
+        directory = self.launcher_dir_entry.get().strip()
+        if not directory:
+            messagebox.showwarning("提示", "请输入或选择一个目录。")
+            return
+        self._open_vscode(directory)
 
     def _launch_claude(self, directory: str, label: str = ""):
         if not label:
@@ -767,6 +803,18 @@ class ModelSwitcherApp(ctk.CTk):
         )
         btn_launch.pack(side="left", padx=3)
 
+        btn_vscode = ctk.CTkButton(
+            btn_frame,
+            text="💻",
+            command=lambda d=record.directory: self._open_vscode(d),
+            width=32, height=28,
+            font=(FONT_FAMILY, 12),
+            fg_color="#007acc",
+            hover_color="#005a9e",
+            corner_radius=6,
+        )
+        btn_vscode.pack(side="left", padx=3)
+
         btn_export = ctk.CTkButton(
             btn_frame,
             text="📄",
@@ -807,6 +855,7 @@ class ModelSwitcherApp(ctk.CTk):
 
         # 鼠标悬浮中文提示
         ToolTip(btn_launch, "在此目录打开 Claude")
+        ToolTip(btn_vscode, "在 VS Code 中打开此目录")
         ToolTip(btn_export, "导出该目录下的对话记录")
         ToolTip(btn_open, "在文件资源管理器中打开此目录")
         ToolTip(btn_delete, "删除此条历史记录")
