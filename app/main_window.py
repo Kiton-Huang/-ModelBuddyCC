@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import messagebox, filedialog
 
 from app.constants import CLAUDE_JSON, BACKUP_DIR, EXECUTION_MODES, EXECUTION_MODE_KEYS
@@ -22,6 +23,55 @@ from app.export import _get_conversation_files, _parse_jsonl, _generate_export_h
 from app.dashboard import BalanceDashboard
 from app.profile_dialog import ProfileDialog
 from app.export_dialog import ExportOptionsDialog
+
+# ─── ToolTip 悬浮提示 ──────────────────────────────────────
+class ToolTip:
+    """鼠标悬浮时显示中文提示气泡"""
+
+    def __init__(self, widget, text: str, delay_ms: int = 400):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self.tip_window = None
+        self._enter_id = None
+        widget.bind('<Enter>', self._schedule_show)
+        widget.bind('<Leave>', self._hide)
+
+    def _schedule_show(self, event=None):
+        self._hide()
+        self._enter_id = self.widget.after(self.delay_ms, self._show)
+
+    def _show(self):
+        if self.tip_window:
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 2
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.wm_attributes("-topmost", True)
+        # 跟随主题
+        from app.theme import _appearance_mode as _mode
+        if _mode == "dark":
+            bg, fg, border = "#1e293b", "#e2e8f0", "#475569"
+        else:
+            bg, fg, border = "#ffffff", "#0f172a", "#c8cdd5"
+        label = tk.Label(
+            tw, text=self.text, justify='center',
+            background=bg, foreground=fg,
+            font=('Microsoft YaHei', 10), padx=10, pady=4,
+            relief='solid', borderwidth=1,
+        )
+        label.pack()
+
+    def _hide(self, event=None):
+        if self._enter_id:
+            self.widget.after_cancel(self._enter_id)
+            self._enter_id = None
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
 
 # ─── 主窗口 ──────────────────────────────────────────────────
 class ModelSwitcherApp(ctk.CTk):
@@ -507,6 +557,7 @@ class ModelSwitcherApp(ctk.CTk):
             corner_radius=8,
         )
         self.btn_launch.grid(row=0, column=0, sticky="w", padx=(16, 12), pady=14)
+        ToolTip(self.btn_launch, "在选定的项目目录中启动 Claude Code")
 
         self.btn_export = ctk.CTkButton(
             self.ctrl_frame,
@@ -519,6 +570,7 @@ class ModelSwitcherApp(ctk.CTk):
             corner_radius=8,
         )
         self.btn_export.grid(row=0, column=1, sticky="w", padx=(0, 8), pady=14)
+        ToolTip(self.btn_export, "导出项目目录下的 Claude 对话记录为 HTML 文件")
 
         self.auto_launch_check = ctk.CTkCheckBox(
             self.ctrl_frame,
@@ -703,7 +755,7 @@ class ModelSwitcherApp(ctk.CTk):
         btn_frame = ctk.CTkFrame(card, fg_color="transparent")
         btn_frame.grid(row=0, column=2, rowspan=2, sticky="e", padx=(0, 10), pady=8)
 
-        ctk.CTkButton(
+        btn_launch = ctk.CTkButton(
             btn_frame,
             text="▶",
             command=lambda d=record.directory, l=record.label: self._launch_claude(d, l),
@@ -712,9 +764,10 @@ class ModelSwitcherApp(ctk.CTk):
             fg_color=COLORS["success"],
             hover_color=COLORS["success_hover"],
             corner_radius=6,
-        ).pack(side="left", padx=3)
+        )
+        btn_launch.pack(side="left", padx=3)
 
-        ctk.CTkButton(
+        btn_export = ctk.CTkButton(
             btn_frame,
             text="📄",
             command=lambda d=record.directory: self._on_export_conversations(d),
@@ -723,9 +776,10 @@ class ModelSwitcherApp(ctk.CTk):
             fg_color=COLORS["warning"],
             hover_color=COLORS["warning_hover"],
             corner_radius=6,
-        ).pack(side="left", padx=3)
+        )
+        btn_export.pack(side="left", padx=3)
 
-        ctk.CTkButton(
+        btn_open = ctk.CTkButton(
             btn_frame,
             text="📂",
             command=lambda d=record.directory: os.startfile(d) if os.path.isdir(d) else None,
@@ -735,9 +789,10 @@ class ModelSwitcherApp(ctk.CTk):
             hover_color=COLORS["accent"],
             text_color=COLORS["text_primary"],
             corner_radius=6,
-        ).pack(side="left", padx=3)
+        )
+        btn_open.pack(side="left", padx=3)
 
-        ctk.CTkButton(
+        btn_delete = ctk.CTkButton(
             btn_frame,
             text="✕",
             command=lambda r=record: self._on_delete_history(r),
@@ -747,7 +802,14 @@ class ModelSwitcherApp(ctk.CTk):
             hover_color=COLORS["danger"],
             text_color=COLORS["text_primary"],
             corner_radius=6,
-        ).pack(side="left", padx=3)
+        )
+        btn_delete.pack(side="left", padx=3)
+
+        # 鼠标悬浮中文提示
+        ToolTip(btn_launch, "在此目录打开 Claude")
+        ToolTip(btn_export, "导出该目录下的对话记录")
+        ToolTip(btn_open, "在文件资源管理器中打开此目录")
+        ToolTip(btn_delete, "删除此条历史记录")
 
     def _on_delete_history(self, record: LaunchRecord):
         self.launch_history = [r for r in self.launch_history if r.directory != record.directory or r.opened_at != record.opened_at]
@@ -832,10 +894,21 @@ class ModelSwitcherApp(ctk.CTk):
             return
 
         # ── 弹出选项对话框 ──────────────────────────────────
-        opt_dialog = ExportOptionsDialog(self)
+        opt_dialog = ExportOptionsDialog(self, all_sessions)
         if not opt_dialog.result:
             return  # 用户取消
-        options = opt_dialog.result
+        result = opt_dialog.result
+        content_options = result["content_options"]
+        selected_indices = result.get("selected_indices", [])
+
+        # ── 按选中的对话过滤 ──────────────────────────────
+        if selected_indices:
+            all_sessions = [all_sessions[i] for i in selected_indices
+                            if i < len(all_sessions)]
+
+        if not all_sessions:
+            messagebox.showinfo("未选择对话", "请至少选择一个对话。")
+            return
 
         # ── 选择保存路径 ─────────────────────────────────────
         dir_name = Path(directory).name or "conversations"
@@ -865,7 +938,7 @@ class ModelSwitcherApp(ctk.CTk):
         # ── 后台线程：仅生成 HTML 和写文件（不再读文件）───
         def do_generate():
             try:
-                html_content = _generate_export_html(all_sessions, directory, options)
+                html_content = _generate_export_html(all_sessions, directory, content_options)
                 Path(save_path).write_text(html_content, encoding='utf-8')
 
                 # 预先捕获变量值（避免延迟求值的闭包问题）
