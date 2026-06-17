@@ -114,6 +114,23 @@ def _format_timestamp(ts: str) -> str:
         return ts
 
 
+def _get_user_preview(msg: dict) -> str:
+    """从用户消息中提取简短预览文本（用于导航栏）"""
+    content = msg.get('message', {}).get('content', '')
+    text = ''
+    if isinstance(content, str):
+        text = content.strip()
+    elif isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get('type') == 'text':
+                text = block.get('text', '').strip()
+                break
+    text = text.replace('\n', ' ').strip()
+    if len(text) > 50:
+        text = text[:50] + '…'
+    return text
+
+
 def _render_content_blocks(blocks: list, is_assistant: bool = False, options: dict = None) -> str:
     """将消息内容块渲染为 HTML，options 控制显示哪些内容类型"""
     if options is None:
@@ -226,6 +243,9 @@ def _generate_export_html(all_sessions: list[tuple[Path, list[dict]]], directory
                 total_user += 1
             elif m.get('type') == 'assistant':
                 total_assistant += 1
+
+    # 导航栏数据将在渲染时收集（保证 ID 对齐）
+    _nav_items = []  # (session_idx, msg_id, preview)
 
     html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -724,10 +744,124 @@ def _generate_export_html(all_sessions: list[tuple[Path, list[dict]]], directory
       margin: 8mm;
       size: A4;
     }}
+    #sidebar, #sidebar-toggle-btn {{ display: none !important; }}
+    body {{ padding-right: 0 !important; }}
+  }}
+  #sidebar {{
+    position: fixed;
+    right: 0; top: 0;
+    width: 260px;
+    height: 100vh;
+    background: #e2e8f0;
+    border-left: 1px solid #c8cdd5;
+    color: #334155;
+    z-index: 1000;
+    overflow-y: auto;
+    box-shadow: -2px 0 8px rgba(0,0,0,0.06);
+    transition: transform 0.3s ease;
+    display: flex;
+    flex-direction: column;
+  }}
+  #sidebar.hidden {{
+    transform: translateX(260px);
+  }}
+  .sidebar-header {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 13px;
+    font-weight: 700;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }}
+  .sidebar-close {{
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 4px;
+    line-height: 1;
+    font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  }}
+  .sidebar-close:hover {{
+    background: #e2e8f0;
+    color: #334155;
+  }}
+  .sidebar-list {{
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }}
+  .sidebar-session-label {{
+    padding: 8px 14px 3px;
+    font-size: 9px;
+    font-weight: 700;
+    color: #6366f1;
+    letter-spacing: 0.5px;
+  }}
+  .sidebar-nav-item {{
+    display: block;
+    padding: 5px 14px 5px 20px;
+    font-size: 11px;
+    color: #475569;
+    text-decoration: none;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+    line-height: 1.35;
+  }}
+  .sidebar-nav-item:hover {{
+    background: #c8cdd5;
+    color: #0f172a;
+    border-left-color: #6366f1;
+  }}
+  .sidebar-nav-item.active {{
+    color: #0f172a;
+    background: #c8cdd5;
+    border-left-color: #6366f1;
+    font-weight: 600;
+  }}
+  #sidebar-toggle-btn {{
+    position: fixed;
+    right: 10px; top: 10px;
+    z-index: 1001;
+    width: 34px; height: 34px;
+    background: #ffffff;
+    color: #475569;
+    border: 1px solid #c8cdd5;
+    border-radius: 6px;
+    font-size: 16px;
+    cursor: pointer;
+    display: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }}
+  #sidebar-toggle-btn:hover {{
+    background: #f1f5f9;
+    color: #0f172a;
+  }}
+  body {{
+    padding-right: 270px;
+    transition: padding-right 0.3s ease;
+  }}
+  body.sidebar-hidden {{
+    padding-right: 0;
+  }}
+  body.sidebar-hidden #sidebar {{
+    transform: translateX(260px);
+  }}
+  body.sidebar-hidden #sidebar-toggle-btn {{
+    display: block;
   }}
 </style>
 </head>
 <body>
+<!--SIDEBAR_PLACEHOLDER-->
 <div class="header">
   <h1>📄 ModelBuddyCC 对话记录</h1>
   <div style="font-size:15px;margin-top:4px;">{_html.escape(directory)}</div>
@@ -750,6 +884,7 @@ def _generate_export_html(all_sessions: list[tuple[Path, list[dict]]], directory
 </div>
 '''
 
+    _msg_id = 0  # 重置消息计数器用于渲染
     for session_idx, (filepath, messages) in enumerate(all_sessions):
         if not messages:
             continue
@@ -813,8 +948,15 @@ def _generate_export_html(all_sessions: list[tuple[Path, list[dict]]], directory
                 if model:
                     model_info = f' · <em>{_html.escape(model)}</em>'
 
+            _current_msg_id = _msg_id
+            _msg_id += 1
+            # 收集用户消息到导航栏
+            if msg_type == 'user':
+                _pv = _get_user_preview(msg)
+                if _pv:
+                    _nav_items.append((session_idx, f'msg-{_current_msg_id}', _pv))
             html += f'''
-<div class="message {role_class}">
+<div class="message {role_class}" id="msg-{_current_msg_id}">
   <div class="message-header">
     <span class="role">{role_label}</span>
     {model_info}
@@ -825,6 +967,33 @@ def _generate_export_html(all_sessions: list[tuple[Path, list[dict]]], directory
   </div>
 </div>
 '''
+
+    # ── 构建侧边栏 HTML 并替换占位符 ──
+    _sidebar_html = ''
+    _toggle_btn_html = ''
+    if _nav_items:
+        _sb = '<nav id="sidebar">\n'
+        _sb += '  <div class="sidebar-header">\n'
+        _sb += '    <span>📑 对话导航</span>\n'
+        _sb += f'    <span class="sidebar-count">共 {len(_nav_items)} 条</span>\n'
+        _sb += '    <button class="sidebar-close" onclick="toggleSidebar()" title="隐藏导航栏">✕</button>\n'
+        _sb += '  </div>\n'
+        _sb += '  <div class="sidebar-list">\n'
+        _last_s = -1
+        _item_n = 0
+        for _s_idx, _mid, _prev in _nav_items:
+            if _s_idx != _last_s:
+                _last_s = _s_idx
+                _sb += f'    <div class="sidebar-session-label">会话 #{_s_idx + 1}</div>\n'
+            _item_n += 1
+            _esc = _html.escape(_prev)
+            _sb += f'    <a class="sidebar-nav-item" href="#{_mid}" onclick="scrollToMsg(\'{_mid}\', this)">{_item_n}. {_esc}</a>\n'
+        _sb += '  </div>\n'
+        _sb += '</nav>\n'
+        _sidebar_html = _sb
+        _toggle_btn_html = '<button id="sidebar-toggle-btn" onclick="toggleSidebar()" title="显示导航栏">📑</button>\n'
+    _combined = _sidebar_html + _toggle_btn_html
+    html = html.replace('<!--SIDEBAR_PLACEHOLDER-->', _combined)
 
     html += '''
 <div class="footer">
@@ -874,6 +1043,27 @@ function toggleToolResult(id, btn) {
     if (full) full.style.display = 'none';
     btn.textContent = '📋 展开全部';
     btn.classList.remove('expanded');
+  }
+}
+function scrollToMsg(id, link) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // 高亮当前项
+  document.querySelectorAll('.sidebar-nav-item.active').forEach(function(a) { a.classList.remove('active'); });
+  if (link) link.classList.add('active');
+  // 闪一下目标消息
+  el.style.transition = 'box-shadow 0.4s ease';
+  el.style.boxShadow = '0 0 0 3px #6366f1';
+  setTimeout(function() { el.style.boxShadow = ''; }, 1500);
+}
+function toggleSidebar() {
+  var body = document.body;
+  var hidden = body.classList.contains('sidebar-hidden');
+  if (hidden) {
+    body.classList.remove('sidebar-hidden');
+  } else {
+    body.classList.add('sidebar-hidden');
   }
 }
 </script>
