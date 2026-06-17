@@ -181,15 +181,33 @@ def _render_content_blocks(blocks: list, is_assistant: bool = False, options: di
                 result_str = _html.escape(content)
             else:
                 result_str = _html.escape(json.dumps(content, ensure_ascii=False, indent=2))
-            if len(result_str) > 150:
-                result_str = result_str[:150] + '...'
             if result_str:
-                parts.append(
-                    f'<div class="tool-block tool-result">'
-                    f'<div class="tool-header">📋 工具返回</div>'
-                    f'<pre class="tool-body">{result_str}</pre>'
-                    f'</div>'
-                )
+                if len(result_str) > 300:
+                    short = result_str[:300] + '...'
+                    tool_id = f'tool-{id(block)}'
+                    parts.append(
+                        f'<div class="tool-block tool-result">'
+                        f'<div class="tool-header">'
+                        f'<span class="tool-label">📋 工具返回</span>'
+                        f'<span class="tool-len">({len(result_str)} 字符)</span>'
+                        f'</div>'
+                        f'<div class="tool-body tool-collapsed" id="{tool_id}">'
+                        f'<div class="tool-preview">{short}</div>'
+                        f'<div class="tool-full" style="display:none;">{result_str}</div>'
+                        f'</div>'
+                        f'<button class="tool-toggle" onclick="toggleToolResult(\'{tool_id}\', this)">📋 展开全部</button>'
+                        f'</div>'
+                    )
+                else:
+                    parts.append(
+                        f'<div class="tool-block tool-result">'
+                        f'<div class="tool-header">'
+                        f'<span class="tool-label">📋 工具返回</span>'
+                        f'<span class="tool-len">({len(result_str)} 字符)</span>'
+                        f'</div>'
+                        f'<div class="tool-body">{result_str}</div>'
+                        f'</div>'
+                    )
     return '\n'.join(parts)
 
 
@@ -505,6 +523,53 @@ def _generate_export_html(all_sessions: list[tuple[Path, list[dict]]], directory
     background: #0f172a;
     line-height: 1.3;
   }}
+  .tool-label {{
+    font-size: 10px;
+    font-weight: 600;
+    color: #e2e8f0;
+  }}
+  .tool-len {{
+    font-size: 8px;
+    color: #94a3b8;
+    background: #1e293b;
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 6px;
+  }}
+  .tool-result .tool-body {{
+    max-height: 400px;
+  }}
+  .tool-collapsed .tool-preview {{
+    display: block;
+  }}
+  .tool-collapsed .tool-full {{
+    display: none;
+  }}
+  .tool-expanded .tool-preview {{
+    display: none;
+  }}
+  .tool-expanded .tool-full {{
+    display: block;
+  }}
+  .tool-toggle {{
+    display: block;
+    width: 100%;
+    padding: 4px 10px;
+    font-size: 9px;
+    font-weight: 600;
+    color: #94a3b8;
+    background: #1e293b;
+    border: none;
+    border-top: 1px solid #334155;
+    cursor: pointer;
+    font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+    transition: all 0.15s ease;
+    text-align: center;
+  }}
+  .tool-toggle:hover {{
+    background: #334155;
+    color: #e2e8f0;
+  }}
   pre {{
     background: var(--code-bg);
     color: var(--code-text);
@@ -641,6 +706,15 @@ def _generate_export_html(all_sessions: list[tuple[Path, list[dict]]], directory
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }}
+    .tool-toggle {{
+      display: none !important;
+    }}
+    .tool-collapsed .tool-preview {{
+      display: block !important;
+    }}
+    .tool-collapsed .tool-full {{
+      display: none !important;
+    }}
     pre {{
       background: #1e293b !important;
       -webkit-print-color-adjust: exact;
@@ -774,6 +848,28 @@ function toggleThinking(id, btn) {
   } else {
     el.classList.remove('thinking-expanded');
     el.classList.add('thinking-collapsed');
+    if (preview) preview.style.display = 'block';
+    if (full) full.style.display = 'none';
+    btn.textContent = '📋 展开全部';
+    btn.classList.remove('expanded');
+  }
+}
+function toggleToolResult(id, btn) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var preview = el.querySelector('.tool-preview');
+  var full = el.querySelector('.tool-full');
+  var isCollapsed = el.classList.contains('tool-collapsed');
+  if (isCollapsed) {
+    el.classList.remove('tool-collapsed');
+    el.classList.add('tool-expanded');
+    if (preview) preview.style.display = 'none';
+    if (full) full.style.display = 'block';
+    btn.textContent = '📋 收起';
+    btn.classList.add('expanded');
+  } else {
+    el.classList.remove('tool-expanded');
+    el.classList.add('tool-collapsed');
     if (preview) preview.style.display = 'block';
     if (full) full.style.display = 'none';
     btn.textContent = '📋 展开全部';
