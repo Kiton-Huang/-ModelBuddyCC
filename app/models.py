@@ -11,6 +11,11 @@ class ModelProfile:
     api_key: str
     model: str
     notes: str = ""
+    # ── 模型层级映射（可选，空 = 不设置） ──
+    opus_model: str = ""        # ANTHROPIC_DEFAULT_OPUS_MODEL
+    sonnet_model: str = ""      # ANTHROPIC_DEFAULT_SONNET_MODEL
+    haiku_model: str = ""       # ANTHROPIC_DEFAULT_HAIKU_MODEL
+    subagent_model: str = ""    # CLAUDE_CODE_SUBAGENT_MODEL
     created_at: str = ""
     updated_at: str = ""
 

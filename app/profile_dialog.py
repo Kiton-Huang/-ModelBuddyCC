@@ -14,7 +14,7 @@ class ProfileDialog(ctk.CTkToplevel):
         super().__init__(parent)
 
         self.title(title)
-        self.geometry("520x480")
+        self.geometry("520x620")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -42,6 +42,7 @@ class ProfileDialog(ctk.CTkToplevel):
         url_history = list(set(p.base_url for p in self.profiles if p.base_url))
         model_history = list(set(p.model for p in self.profiles if p.model))
 
+        # ── 基础字段 ──
         fields = [
             ("name", "配置名称 *", "例如：DeepSeek V4", "entry", []),
             ("base_url", "API 地址 *", "例如：https://api.deepseek.com/anthropic", "combo", url_history),
@@ -86,19 +87,86 @@ class ProfileDialog(ctk.CTkToplevel):
             entry.grid(row=i, column=1, sticky="ew", padx=(0, 20), pady=(16, 0))
             self.entries[key] = entry
 
+        base_row = len(fields)  # = 5
+
+        # ── 高级选项折叠按钮 ──
+        self.advanced_toggle = ctk.CTkButton(
+            self, text="▶ 高级选项",
+            command=self._toggle_advanced,
+            font=(FONT_FAMILY, 12, "bold"),
+            fg_color="transparent",
+            text_color=COLORS["accent"],
+            hover_color=COLORS["bg_hover"],
+            anchor="w",
+        )
+        self.advanced_toggle.grid(row=base_row, column=0, columnspan=2,
+                                  sticky="w", padx=16, pady=(12, 0))
+
+        # ── 高级选项内容（初始隐藏） ──
+        self.advanced_frame = ctk.CTkFrame(self, fg_color="transparent")
+        # 放在 toggle 下面，初始不显示
+        self.advanced_frame.grid_rowconfigure((0, 1, 2, 3, 4), weight=0)
+
+        adv_fields = [
+            ("opus_model", "Opus 模型映射",
+             "Claude Code 调用 Opus 级别任务时使用的模型"),
+            ("sonnet_model", "Sonnet 模型映射",
+             "Claude Code 调用 Sonnet 级别任务时使用的模型"),
+            ("haiku_model", "Haiku 模型映射",
+             "Claude Code 调用 Haiku 级别任务时使用的模型"),
+            ("subagent_model", "子代理模型",
+             "Claude Code 子代理使用的模型"),
+        ]
+
+        for j, (key, label, hint) in enumerate(adv_fields):
+            ctk.CTkLabel(
+                self.advanced_frame, text=label,
+                font=(FONT_FAMILY, 11, "bold"),
+                text_color=COLORS["text_secondary"], anchor="w",
+            ).grid(row=j, column=0, sticky="w", padx=(20, 8), pady=(10, 0))
+
+            entry = ctk.CTkComboBox(
+                self.advanced_frame,
+                values=model_history,
+                font=(FONT_FAMILY, 13),
+                height=34,
+                fg_color=COLORS["bg_input"],
+                border_color=COLORS["border"],
+                button_color=COLORS["bg_hover"],
+                button_hover_color=COLORS["accent"],
+                corner_radius=6,
+            )
+            entry.set("")
+            entry.grid(row=j, column=1, sticky="ew", padx=(0, 20), pady=(10, 0))
+            self.entries[key] = entry
+
+        # ── DeepSeek 一键预设 ──
+        self.btn_preset = ctk.CTkButton(
+            self, text="🪄 DeepSeek 一键预设",
+            command=self._apply_deepseek_preset,
+            font=(FONT_FAMILY, 12, "bold"),
+            fg_color="#4c1d95",
+            hover_color="#6d28d9",
+            corner_radius=6,
+            height=34,
+        )
+        # 放在 advanced_frame 下面，初始也隐藏
+        self.btn_preset.grid_remove()
+
         # 提示文本
+        tip_row = base_row + 3  # toggle + advanced_frame + btn_preset (space reserved)
         tip = ctk.CTkLabel(
             self,
-            text="* 为必填项",
-            font=(FONT_FAMILY, 11),
+            text="* 为必填项  |  高级选项中填写模型映射以充分利用 DeepSeek 推荐配置",
+            font=(FONT_FAMILY, 10),
             text_color=COLORS["text_muted"],
         )
-        tip.grid(row=len(fields), column=0, columnspan=2, sticky="w", padx=20, pady=(8, 0))
+        tip.grid(row=tip_row, column=0, columnspan=2, sticky="w", padx=20, pady=(8, 0))
 
         # 按钮
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(
-            row=len(fields) + 1, column=0, columnspan=2,
+            row=tip_row + 1, column=0, columnspan=2,
             sticky="ew", padx=20, pady=(20, 16),
         )
         btn_frame.grid_columnconfigure(0, weight=1)
@@ -132,6 +200,61 @@ class ProfileDialog(ctk.CTkToplevel):
                         entry.configure(values=current_vals)
                 else:
                     entry.insert(0, self.initial[key])
+
+    # ── 高级选项折叠 ──
+
+    def _toggle_advanced(self):
+        if self.advanced_frame.winfo_viewable():
+            self.advanced_frame.grid_remove()
+            self.btn_preset.grid_remove()
+            self.advanced_toggle.configure(text="▶ 高级选项")
+        else:
+            self.advanced_frame.grid(
+                row=6, column=0, columnspan=2, sticky="ew", padx=0, pady=0
+            )
+            self.btn_preset.grid(
+                row=7, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 0)
+            )
+            self.advanced_toggle.configure(text="▼ 高级选项")
+
+    def _apply_deepseek_preset(self):
+        """一键填入 DeepSeek 推荐配置"""
+        confirm = messagebox.askyesno(
+            "DeepSeek 一键预设",
+            "将填入 DeepSeek 官方推荐值：\n\n"
+            "• API 地址：https://api.deepseek.com/anthropic\n"
+            "• 模型：deepseek-v4-pro[1m]\n"
+            "• Opus/Sonnet 映射：deepseek-v4-pro[1m]\n"
+            "• Haiku/子代理：deepseek-v4-flash\n\n"
+            "已有内容将被覆盖，是否继续？",
+            parent=self,
+        )
+        if not confirm:
+            return
+
+        if not self.advanced_frame.winfo_viewable():
+            self._toggle_advanced()
+
+        preset = {
+            "base_url": "https://api.deepseek.com/anthropic",
+            "model": "deepseek-v4-pro[1m]",
+            "opus_model": "deepseek-v4-pro[1m]",
+            "sonnet_model": "deepseek-v4-pro[1m]",
+            "haiku_model": "deepseek-v4-flash",
+            "subagent_model": "deepseek-v4-flash",
+        }
+        for key, value in preset.items():
+            if key in self.entries:
+                entry = self.entries[key]
+                if isinstance(entry, ctk.CTkComboBox):
+                    if value not in entry.cget("values"):
+                        current_vals = list(entry.cget("values"))
+                        current_vals.insert(0, value)
+                        entry.configure(values=current_vals)
+                    entry.set(value)
+                else:
+                    entry.delete(0, "end")
+                    entry.insert(0, value)
 
     def _on_save(self):
         data = {}

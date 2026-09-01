@@ -14,7 +14,12 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox, filedialog
 
-from app.constants import CLAUDE_JSON, BACKUP_DIR, EXECUTION_MODES, EXECUTION_MODE_KEYS
+from app.constants import (
+    CLAUDE_JSON, BACKUP_DIR,
+    EXECUTION_MODES, EXECUTION_MODE_KEYS,
+    EFFORT_LEVELS, EFFORT_LEVEL_KEYS,
+    NOTIFY_EVENTS_DIR,
+)
 from app.theme import COLORS, FONT_FAMILY, _appearance_mode, _sync_colors
 from app.models import ModelProfile, LaunchRecord
 from app.config import ConfigManager
@@ -23,6 +28,8 @@ from app.export import _get_conversation_files, _parse_jsonl, _generate_export_h
 from app.dashboard import BalanceDashboard
 from app.profile_dialog import ProfileDialog
 from app.export_dialog import ExportOptionsDialog
+from app.notify_engine import NotifyEngine
+from app.notify_tab import build_notify_tab
 
 # ─── ToolTip 悬浮提示 ──────────────────────────────────────
 class ToolTip:
@@ -78,9 +85,26 @@ class ModelSwitcherApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        # 让 Windows 将本窗口识别为独立应用（任务栏图标不继承 python.exe）
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "ModelBuddyCC.App")
+        except Exception:
+            pass
+
         self.title("ModelBuddyCC")
         self.geometry("920x680")
         self.minsize(780, 560)
+
+        # 窗口图标（标题栏 + 任务栏）
+        import os as _os
+        _ico = _os.path.join(_os.path.dirname(__file__), "modelbuddy.ico")
+        if _os.path.isfile(_ico):
+            self.iconbitmap(_ico)
+            # 任务栏图标：延迟设置，等窗口创建完毕
+            self.after(200, lambda: self._set_taskbar_icon(_ico))
+
         self.configure(fg_color=COLORS["bg_dark"])
 
         # 初始化数据（延迟加载）
@@ -93,6 +117,7 @@ class ModelSwitcherApp(ctk.CTk):
         self.launch_history: list[LaunchRecord] = []
         self._auto_launch = ctk.BooleanVar(value=False)
         self.current_mode: str = "default"  # 当前执行模式
+        self.current_effort: str = ""       # 当前努力级别
 
         # 导出状态（防止并发导出）
         self._export_busy = False
@@ -107,12 +132,15 @@ class ModelSwitcherApp(ctk.CTk):
         }
 
         self._build_ui()
-        # 延迟加载数据，不阻塞窗口首屏渲染
-        self.after(50, self._load_data)
+        # 同步加载数据：在窗口首次显示前完成，避免先显示空列表再填充的闪烁
+        self._load_data()
 
         # 启动系统主题检测
         self._last_appearance = _appearance_mode
         self._theme_check_loop()
+
+        # 快捷键
+        self.bind_all("<Control-Shift-T>", lambda e: self._on_toggle_topmost_shortcut())
 
         # 窗口关闭事件
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -199,10 +227,77 @@ class ModelSwitcherApp(ctk.CTk):
             font=(FONT_FAMILY, 8),
             text_color=COLORS["text_muted"],
         )
-        self.mode_desc_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(1, 0))
+        self.mode_desc_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(1, 0))
 
+        # ── 努力级别选择器 ──
+        self.effort_label = ctk.CTkLabel(
+            self.mode_frame,
+            text="努力级别",
+            font=(FONT_FAMILY, 10, "bold"),
+            text_color=COLORS["text_muted"],
+        )
+        self.effort_label.grid(row=0, column=2, columnspan=2, sticky="w", padx=(12, 0), pady=(0, 1))
+
+        self.effort_combo = ctk.CTkComboBox(
+            self.mode_frame,
+            values=[EFFORT_LEVELS[k]["label"] for k in EFFORT_LEVEL_KEYS],
+            font=(FONT_FAMILY, 12),
+            width=150,
+            height=30,
+            fg_color=COLORS["bg_input"],
+            border_color=COLORS["border"],
+            button_color=COLORS["bg_hover"],
+            button_hover_color=COLORS["accent"],
+            corner_radius=6,
+            dropdown_font=(FONT_FAMILY, 12),
+            command=self._on_effort_changed,
+        )
+        self.effort_combo.grid(row=1, column=2, sticky="ew", padx=(12, 4))
+        self._effort_label_to_key = {EFFORT_LEVELS[k]["label"]: k for k in EFFORT_LEVEL_KEYS}
+
+        self.btn_apply_effort = ctk.CTkButton(
+            self.mode_frame,
+            text="应用",
+            command=self._on_apply_effort,
+            width=50,
+            height=30,
+            font=(FONT_FAMILY, 11, "bold"),
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            corner_radius=6,
+        )
+        self.btn_apply_effort.grid(row=1, column=3, sticky="e")
+
+        # ── 开关 + 标签行（放在 mode_frame 底部，避免重叠） ──
+        switch_row = ctk.CTkFrame(self.mode_frame, fg_color="transparent")
+        switch_row.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        switch_row.grid_columnconfigure(2, weight=1)  # 中间撑开
+
+        # 窗口置顶开关
+        self.topmost_var = ctk.BooleanVar(value=False)
+        self._topmost_switch = ctk.CTkSwitch(
+            switch_row, text="窗口置顶", variable=self.topmost_var,
+            font=(FONT_FAMILY, 11),
+            fg_color=COLORS["bg_hover"], progress_color=COLORS["accent"],
+            text_color=COLORS["text_secondary"],
+            command=self._on_toggle_topmost,
+        )
+        self._topmost_switch.pack(side="left", padx=(0, 12))
+
+        # 开机自启动开关
+        self.startup_var = ctk.BooleanVar(value=False)
+        self._startup_switch = ctk.CTkSwitch(
+            switch_row, text="开机自启", variable=self.startup_var,
+            font=(FONT_FAMILY, 11),
+            fg_color=COLORS["bg_hover"], progress_color=COLORS["accent"],
+            text_color=COLORS["text_secondary"],
+            command=self._on_toggle_startup,
+        )
+        self._startup_switch.pack(side="left", padx=(0, 12))
+
+        # API 来源标签
         self.status_badge = ctk.CTkLabel(
-            self.status_frame,
+            switch_row,
             text="",
             font=(FONT_FAMILY, 11),
             text_color=COLORS["accent_light"],
@@ -210,7 +305,7 @@ class ModelSwitcherApp(ctk.CTk):
             corner_radius=6,
             padx=10,
         )
-        self.status_badge.pack(side="right", padx=20, pady=14)
+        self.status_badge.pack(side="right")
 
         # ── Tabview ──
         self.tabview = ctk.CTkTabview(self, corner_radius=10,
@@ -219,6 +314,7 @@ class ModelSwitcherApp(ctk.CTk):
 
         self.tab_model = self.tabview.add("模型配置")
         self.tab_launcher = self.tabview.add("Claude 启动器")
+        self.tab_notify = self.tabview.add("通知设置")
 
         # ── Tab 1：模型配置 ──
         self.tab_model.grid_columnconfigure(0, weight=1)
@@ -390,6 +486,13 @@ class ModelSwitcherApp(ctk.CTk):
         # ── Tab 2：Claude 启动器 ──
         self._build_launcher_tab()
 
+        # ── Tab 3：通知设置 ──
+        self.notify_engine = NotifyEngine(self)
+        build_notify_tab(self.tab_notify, self.notify_engine)
+
+        # 启动事件监视器
+        self.notify_engine.start_watching()
+
     def _build_detail_widgets(self):
         """构建详情字段（初始隐藏）"""
         # 配置标题区
@@ -455,6 +558,49 @@ class ModelSwitcherApp(ctk.CTk):
 
             self.detail_widgets[key] = (lbl, val)
             row += 2
+
+        # ── 模型映射区域（条件显示） ──
+        self.detail_widgets_row_mappings = row  # 记录起始行
+        sep_m = ctk.CTkFrame(self.detail_frame, height=1, fg_color=COLORS["border"])
+        sep_m.grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 4))
+        sep_m._show = False
+        self.detail_widgets["_sep_mappings"] = (sep_m,)
+        row += 1
+
+        map_label = ctk.CTkLabel(
+            self.detail_frame, text="模型映射",
+            font=(FONT_FAMILY, 10, "bold"),
+            text_color=COLORS["text_muted"], anchor="w",
+        )
+        map_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=(20, 16), pady=(0, 4))
+        map_label._show = False
+        self.detail_widgets["_map_label"] = (map_label,)
+        row += 1
+
+        for text, key in [
+            ("Opus 模型", "opus_model"),
+            ("Sonnet 模型", "sonnet_model"),
+            ("Haiku 模型", "haiku_model"),
+            ("子代理模型", "subagent_model"),
+        ]:
+            lbl = ctk.CTkLabel(
+                self.detail_frame, text=text,
+                font=(FONT_FAMILY, 11),
+                text_color=COLORS["text_muted"], anchor="w",
+            )
+            lbl.grid(row=row, column=0, sticky="w", padx=(20, 8), pady=(1, 0))
+            lbl._show = False
+
+            val = ctk.CTkLabel(
+                self.detail_frame, text="",
+                font=(FONT_FAMILY, 11),
+                text_color=COLORS["text_secondary"], anchor="w",
+            )
+            val.grid(row=row, column=1, sticky="w", padx=(0, 16), pady=(1, 0))
+            val._show = False
+
+            self.detail_widgets[key] = (lbl, val)
+            row += 1
 
         # 分隔线
         sep2 = ctk.CTkFrame(self.detail_frame, height=1, fg_color=COLORS["border"])
@@ -645,13 +791,34 @@ class ModelSwitcherApp(ctk.CTk):
 
     @staticmethod
     def _open_vscode(directory: str):
-        """在指定目录中用 VS Code 打开（执行 code .）"""
+        """在指定目录中用 VS Code 打开"""
+        import shutil
+
         if not os.path.isdir(directory):
             messagebox.showwarning("提示", f"目录不存在：\n{directory}")
             return
+
+        # 显式通过 code.cmd 调用，利用 ELECTRON_RUN_AS_NODE=1 的
+        # CLI 模式检测已有实例（快），同时避免 shell 解析 code vs
+        # code.cmd 歧义导致的双窗口问题
+        code_cmd = shutil.which("code.cmd")
         try:
-            subprocess.Popen('code .', cwd=directory, shell=True,
-                             creationflags=subprocess.CREATE_NO_WINDOW)
+            if code_cmd:
+                subprocess.Popen(
+                    ["cmd", "/c", code_cmd, directory],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                # 回退：通过 shell 调用 code 命令
+                subprocess.Popen(
+                    f'code "{directory}"',
+                    shell=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
         except FileNotFoundError:
             messagebox.showwarning(
                 "未找到 VS Code",
@@ -1029,6 +1196,8 @@ class ModelSwitcherApp(ctk.CTk):
         self.current_env = ConfigManager.load_env()
         self.launch_history = ConfigManager.load_launch_history()
         self.current_mode = ConfigManager.load_default_mode()
+        self.current_effort = self.current_env.get("CLAUDE_CODE_EFFORT_LEVEL", "")
+        self.startup_var.set(self.notify_engine.is_startup_installed())
         self._refresh_list()
         self._show_current_status()
         self._refresh_launch_history()
@@ -1134,9 +1303,8 @@ class ModelSwitcherApp(ctk.CTk):
         self.detail_model_badge.configure(text=profile.model)
         self.detail_model_badge._show = True
 
-        # 分隔线
-        for k in ("_sep1", "_sep2"):
-            self.detail_widgets[k][0]._show = True
+        # 分隔线（_sep2 后面处理，模型映射有值才显示）
+        self.detail_widgets["_sep1"][0]._show = True
 
         # 字段值
         for key in ["base_url", "api_key", "notes"]:
@@ -1149,6 +1317,28 @@ class ModelSwitcherApp(ctk.CTk):
             if key == "notes" and not text:
                 text = "—"
             val.configure(text=text)
+
+        # 模型映射（条件显示：至少有一个字段有值）
+        mapping_keys = ["opus_model", "sonnet_model", "haiku_model", "subagent_model"]
+        has_mappings = any(getattr(profile, k, "") for k in mapping_keys)
+        if has_mappings:
+            self.detail_widgets["_sep_mappings"][0]._show = True
+            self.detail_widgets["_map_label"][0]._show = True
+            for key in mapping_keys:
+                lbl, val = self.detail_widgets[key]
+                lbl._show = True
+                val._show = True
+                text = getattr(profile, key, "")
+                val.configure(text=text if text else "未设置")
+        else:
+            self.detail_widgets["_sep_mappings"][0]._show = False
+            self.detail_widgets["_map_label"][0]._show = False
+            for key in mapping_keys:
+                lbl, val = self.detail_widgets[key]
+                lbl._show = False
+                val._show = False
+
+        self.detail_widgets["_sep2"][0]._show = True
 
         for key in ["created_at", "updated_at"]:
             lbl, val = self.detail_widgets[key]
@@ -1172,6 +1362,10 @@ class ModelSwitcherApp(ctk.CTk):
             current.get("ANTHROPIC_BASE_URL", "") == profile.base_url
             and current.get("ANTHROPIC_AUTH_TOKEN", "") == profile.api_key
             and current.get("ANTHROPIC_MODEL", "") == profile.model
+            and current.get("ANTHROPIC_DEFAULT_OPUS_MODEL", "") == (profile.opus_model or "")
+            and current.get("ANTHROPIC_DEFAULT_SONNET_MODEL", "") == (profile.sonnet_model or "")
+            and current.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "") == (profile.haiku_model or "")
+            and current.get("CLAUDE_CODE_SUBAGENT_MODEL", "") == (profile.subagent_model or "")
         )
         if match:
             self.btn_apply.configure(
@@ -1200,6 +1394,10 @@ class ModelSwitcherApp(ctk.CTk):
         self.mode_combo.set(mode_info["label"])
         self.mode_desc_label.configure(text=mode_info["desc"])
         self._update_apply_button()
+        # 更新努力级别选择器
+        effort_info = EFFORT_LEVELS.get(self.current_effort, EFFORT_LEVELS[""])
+        self.effort_combo.set(effort_info["label"])
+        self._update_effort_button()
 
     # ── 执行模式切换 ─────────────────────────────────────────────
 
@@ -1257,6 +1455,54 @@ class ModelSwitcherApp(ctk.CTk):
                 text_color=COLORS["danger"],
             )
 
+    # ── 努力级别切换 ─────────────────────────────────────────────
+
+    def _on_effort_changed(self, selected_label: str):
+        """努力级别下拉框变更 — 仅预览，需点应用才生效"""
+        self._update_effort_button()
+
+    def _update_effort_button(self):
+        """根据当前选中努力级别是否等于已保存值，更新按钮状态"""
+        combo_label = self.effort_combo.get()
+        selected_key = self._effort_label_to_key.get(combo_label)
+        if selected_key == self.current_effort:
+            self.btn_apply_effort.configure(
+                text="已生效 ✓",
+                fg_color=COLORS["bg_hover"],
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["success"],
+                state="disabled",
+            )
+        else:
+            self.btn_apply_effort.configure(
+                text="应用",
+                fg_color=COLORS["accent"],
+                hover_color=COLORS["accent_hover"],
+                text_color=COLORS["text_primary"],
+                state="normal",
+            )
+
+    def _on_apply_effort(self):
+        """将选中的努力级别合并写入 .claude.json"""
+        combo_label = self.effort_combo.get()
+        effort_key = self._effort_label_to_key.get(combo_label)
+        if effort_key is None or effort_key == self.current_effort:
+            return
+
+        ok = ConfigManager.update_env(
+            {"CLAUDE_CODE_EFFORT_LEVEL": effort_key} if effort_key else {}
+        )
+        if ok:
+            self.current_effort = effort_key
+            self.current_env = ConfigManager.load_env()
+            self._update_effort_button()
+            self._show_current_status()
+        else:
+            self.mode_desc_label.configure(
+                text="⚠ 努力级别保存失败，请检查文件权限",
+                text_color=COLORS["danger"],
+            )
+
     # ── 操作对话框 ───────────────────────────────────────────
 
     def _on_add(self):
@@ -1269,6 +1515,10 @@ class ModelSwitcherApp(ctk.CTk):
                 api_key=dialog.result["api_key"],
                 model=dialog.result["model"],
                 notes=dialog.result.get("notes", ""),
+                opus_model=dialog.result.get("opus_model", ""),
+                sonnet_model=dialog.result.get("sonnet_model", ""),
+                haiku_model=dialog.result.get("haiku_model", ""),
+                subagent_model=dialog.result.get("subagent_model", ""),
                 created_at=now,
                 updated_at=now,
             )
@@ -1334,6 +1584,20 @@ class ModelSwitcherApp(ctk.CTk):
             "ANTHROPIC_AUTH_TOKEN": profile.api_key,
             "ANTHROPIC_MODEL": profile.model,
         }
+        # 模型层级映射（非空时才写入）
+        _model_mappings = [
+            ("opus_model", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            ("sonnet_model", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
+            ("haiku_model", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+            ("subagent_model", "CLAUDE_CODE_SUBAGENT_MODEL"),
+        ]
+        for attr, env_key in _model_mappings:
+            val = getattr(profile, attr, "")
+            if val:
+                env[env_key] = val
+        # 保留当前努力级别（独立于 profile）
+        if self.current_effort:
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = self.current_effort
 
         # 禁用按钮防连点，显示加载状态
         self.btn_apply.configure(text="应用配置中...", state="disabled")
@@ -1431,6 +1695,15 @@ class ModelSwitcherApp(ctk.CTk):
         )
         self.mode_desc_label.configure(text_color=c["text_muted"])
         self._update_apply_button()  # 恢复按钮状态
+        # 努力级别选择器
+        self.effort_label.configure(text_color=c["text_muted"])
+        self.effort_combo.configure(
+            fg_color=c["bg_input"],
+            border_color=c["border"],
+            button_color=c["bg_hover"],
+            button_hover_color=c["accent"],
+        )
+        self._update_effort_button()
 
         # Tabview
         self.tabview.configure(fg_color=c["bg_dark"])
@@ -1445,9 +1718,14 @@ class ModelSwitcherApp(ctk.CTk):
         if hasattr(self, "detail_title") and getattr(self.detail_title, "_show", False):
             self.detail_title.configure(text_color=c["text_primary"])
             self.detail_model_badge.configure(fg_color=c["bg_hover"])
-            for key in ("_sep1", "_sep2"):
-                self.detail_widgets[key][0].configure(fg_color=c["border"])
-            for key in ("base_url", "api_key", "notes", "created_at", "updated_at"):
+            for key in ("_sep1", "_sep2", "_sep_mappings"):
+                if key in self.detail_widgets:
+                    self.detail_widgets[key][0].configure(fg_color=c["border"])
+            if "_map_label" in self.detail_widgets:
+                self.detail_widgets["_map_label"][0].configure(text_color=c["text_muted"])
+            for key in ("base_url", "api_key", "notes",
+                        "created_at", "updated_at",
+                        "opus_model", "sonnet_model", "haiku_model", "subagent_model"):
                 lbl, val = self.detail_widgets[key]
                 lbl.configure(text_color=c["text_muted"])
                 val.configure(text_color=c["text_primary"] if key != "created_at" and key != "updated_at" else c["text_secondary"])
@@ -1508,5 +1786,40 @@ class ModelSwitcherApp(ctk.CTk):
             if isinstance(child, ctk.CTkButton):
                 child.configure(text_color=c["text_primary"])
 
+    def _set_taskbar_icon(self, ico_path):
+        """用 SendMessage + WM_SETICON 设置任务栏大图标"""
+        import ctypes
+        try:
+            hwnd = getattr(self, '_hwnd', None) or ctypes.windll.user32.FindWindowW(None, "ModelBuddyCC")
+            if not hwnd:
+                return
+            self._hwnd = hwnd
+            hicon = ctypes.windll.user32.LoadImageW(
+                0, ico_path, 1, 32, 32, 0x00000010,
+            )
+            if hicon:
+                ctypes.windll.user32.SendMessageW(hwnd, 0x0080, 1, hicon)
+        except Exception:
+            pass
+
+    def _on_toggle_topmost(self):
+        on = self.topmost_var.get()
+        self.attributes("-topmost", on)
+        self.title("📌 ModelBuddyCC" if on else "ModelBuddyCC")
+
+    def _on_toggle_topmost_shortcut(self):
+        """Ctrl+Shift+T 快捷键切换置顶"""
+        new_val = not self.topmost_var.get()
+        self.topmost_var.set(new_val)
+        self._on_toggle_topmost()
+
+    def _on_toggle_startup(self):
+        if self.startup_var.get():
+            self.notify_engine.install_startup()
+        else:
+            self.notify_engine.uninstall_startup()
+
     def _on_close(self):
+        if hasattr(self, 'notify_engine'):
+            self.notify_engine.stop_watching()
         self.destroy()

@@ -49,6 +49,40 @@ class ConfigManager:
             print(f"应用配置失败: {e}")
             return False
 
+    @staticmethod
+    def update_env(env_updates: dict) -> bool:
+        """合并式更新 env 配置，只修改传入的 key，保留其他 env var
+
+        用于努力级别等独立设置，无需完整 profile。
+        值为空字符串的 key 会被移除。
+        """
+        try:
+            data = {}
+            if CLAUDE_JSON.exists():
+                data = json.loads(CLAUDE_JSON.read_text(encoding="utf-8"))
+
+            existing = data.get("env", {})
+            existing.update(env_updates)
+            # 清除空值（用户取消设置）
+            existing = {k: v for k, v in existing.items() if v != ""}
+
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shutil.copy2(str(CLAUDE_JSON), str(BACKUP_DIR / f".claude.json.{ts}.bak"))
+
+            backups = sorted(BACKUP_DIR.glob(".claude.json.*.bak"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in backups[5:]:
+                old.unlink()
+
+            data["env"] = existing
+            CLAUDE_JSON.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            return True
+        except Exception as e:
+            print(f"更新环境变量失败: {e}")
+            return False
+
     # ── 配置记忆 ──
     @staticmethod
     def load_profiles() -> list[ModelProfile]:
